@@ -139,7 +139,14 @@ export default function App() {
             const nextDay = gameState.currentDay + 1
             const gameOver = nextDay > gameState.totalDays && !won
 
-            const newHistory = [...gameState.dayHistory, result]
+            const mergedResult = {
+              ...result,
+              choiceRecords: [
+                ...(result.choiceRecords || []),
+                ...(postEventExtra.choiceRecords || []),
+              ],
+            }
+            const newHistory = [...gameState.dayHistory, mergedResult]
 
             // Decrement consumable handouts
             const updatedInventory = { ...gameState.inventory }

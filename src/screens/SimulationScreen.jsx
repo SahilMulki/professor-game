@@ -43,6 +43,7 @@ export default function SimulationScreen({ gameState, onEnd }) {
   const runningLearningRef = useRef(learning)
   const eventsTriggeredRef = useRef([])
   const choiceEffectsRef = useRef([])   // accumulates effects from player choices during lecture
+  const choiceRecordsRef = useRef([])   // tracks which choice was made for each event
   const audioDisabledRef = useRef(false)
   const midAdjustmentRef = useRef(null)
   const endCalledRef = useRef(false)
@@ -172,6 +173,7 @@ export default function SimulationScreen({ gameState, onEnd }) {
       finalEngagementRatio: engagementRatio,
       eventsTriggered: eventsTriggeredRef.current,
       pendingPostEvents,
+      choiceRecords: choiceRecordsRef.current,
     })
   }
 
@@ -219,6 +221,12 @@ export default function SimulationScreen({ gameState, onEnd }) {
     const fx = choice.effects || {}
     if (fx.disableAudio) audioDisabledRef.current = true
     choiceEffectsRef.current.push(fx)
+    choiceRecordsRef.current.push({
+      eventId: event.id,
+      eventTitle: event.title,
+      choiceIndex: event.choices.indexOf(choice),
+      choiceLabel: choice.label,
+    })
     setActiveEvent(null)
     lastTimeRef.current = null
   }

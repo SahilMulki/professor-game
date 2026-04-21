@@ -746,3 +746,101 @@
   color: #2c5282;
   line-height: 1.5;
 }
+
+/* ── Final Score: Your Decisions ─────────── */
+.decisions-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.decisions-heading {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+}
+.decisions-subhead {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: -6px 0 0;
+}
+.decision-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.decision-event-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.decision-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.decision-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: transparent;
+}
+.decision-choice-yours {
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+}
+.decision-choice-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.decision-choice-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex: 1;
+}
+.decision-yours-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #3182ce;
+  color: white;
+  padding: 1px 7px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+.decision-choice-pct {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  min-width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.decision-first {
+  color: #38a169;
+}
+.decision-bar-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.decision-bar-fill {
+  height: 100%;
+  background: #cbd5e0;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.decision-bar-yours {
+  background: #3182ce;
+}
+

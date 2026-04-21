@@ -37,6 +37,7 @@ export default function PostLectureScreen({ gameState, onNext }) {
 
   const [postEventIdx, setPostEventIdx] = useState(0)
   const [postChoiceEffects, setPostChoiceEffects] = useState([])
+  const [postChoiceRecords, setPostChoiceRecords] = useState([])
   const [phase, setPhase] = useState(pendingPostEvents.length > 0 ? 'events' : 'summary')
 
   if (!result) return null
@@ -59,6 +60,12 @@ export default function PostLectureScreen({ gameState, onNext }) {
   function handlePostEventChoice(event, choice) {
     const fx = choice.effects || {}
     setPostChoiceEffects(prev => [...prev, fx])
+    setPostChoiceRecords(prev => [...prev, {
+      eventId: event.id,
+      eventTitle: event.title,
+      choiceIndex: event.choices.indexOf(choice),
+      choiceLabel: choice.label,
+    }])
     if (postEventIdx + 1 >= pendingPostEvents.length) {
       setPhase('summary')
     } else {
@@ -67,7 +74,12 @@ export default function PostLectureScreen({ gameState, onNext }) {
   }
 
   function handleNext() {
-    onNext({ participation: postExtra.participation || 0, learning: postExtra.learning || 0, popularity: postExtra.popularity || 0 })
+    onNext({
+      participation: postExtra.participation || 0,
+      learning: postExtra.learning || 0,
+      popularity: postExtra.popularity || 0,
+      choiceRecords: postChoiceRecords,
+    })
   }
 
   const hints = getLectureFeedback(lecturePlan, result, popularity)
