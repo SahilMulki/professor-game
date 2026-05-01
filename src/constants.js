@@ -1,3 +1,5 @@
+export const TOTAL_DAYS = 7
+
 export const STARTING_STATS = {
   participation: 15,
   learning: 10,
@@ -5,7 +7,8 @@ export const STARTING_STATS = {
   money: 0,
 }
 
-export const DAILY_SALARY = 500
+export const STARTING_MONEY = 250
+export const DAILY_SALARY = 250
 
 export const MS_PER_GAME_MINUTE = 2000 // at 1x speed
 

@@ -10,11 +10,10 @@ import {
   applyEndOfDayItemBonuses,
   clampStat,
 } from '../gameLogic.js'
-import { shouldTriggerEvent, selectEvent } from '../eventSystem.js'
+import { shouldTriggerEvent, getEventByDiceTotal, isEventAvailable } from '../eventSystem.js'
 import { MS_PER_GAME_MINUTE } from '../constants.js'
 import ClassroomGrid from '../components/ClassroomGrid.jsx'
 import SpeedControls from '../components/SpeedControls.jsx'
-import MidLecturePanel from '../components/MidLecturePanel.jsx'
 import EventOverlay from '../components/EventOverlay.jsx'
 import StatBar from '../components/StatBar.jsx'
 import StarRating from '../components/StarRating.jsx'
@@ -29,9 +28,11 @@ function formatTime(minutes) {
 }
 
 const TOTAL_GAME_MINUTES_CONST = 50
+const POST_EVENT_DELAY_MS = 2000
+const EVENT_COOLDOWN_MINUTES = 15
 
 export default function SimulationScreen({ gameState, onEnd }) {
-  const { lecturePlan, participation, learning, popularity, inventory, dayHistory } = gameState
+  const { lecturePlan, participation, learning, popularity, inventory, dayHistory, currentDay, totalDays } = gameState
 
   // Refs — never trigger re-renders
   const rafRef = useRef(null)
@@ -42,24 +43,27 @@ export default function SimulationScreen({ gameState, onEnd }) {
   const runningParticipationRef = useRef(participation)
   const runningLearningRef = useRef(learning)
   const eventsTriggeredRef = useRef([])
-  const choiceEffectsRef = useRef([])   // accumulates effects from player choices during lecture
-  const choiceRecordsRef = useRef([])   // tracks which choice was made for each event
+  const choiceEffectsRef = useRef([])
+  const choiceRecordsRef = useRef([])
+  const hiddenImpactsRef = useRef([])
   const audioDisabledRef = useRef(false)
-  const midAdjustmentRef = useRef(null)
   const endCalledRef = useRef(false)
+  const waitingForDiceRef = useRef(false)
+  const resumeAtRef = useRef(0)       // wall-clock ms; simulation blocked until past this
+  const lastEventMinuteRef = useRef(-EVENT_COOLDOWN_MINUTES) // allows first event from minute 5
 
   // State — triggers re-renders
   const [speed, setSpeed] = useState(1)
   const [isPaused, setIsPaused] = useState(false)
+  const [diceRerollMsg, setDiceRerollMsg] = useState(null)
   const [seatStates, setSeatStates] = useState(() =>
     seatEngagementToState(initializeSeatEngagement(popularity))
   )
   const [minutesElapsed, setMinutesElapsed] = useState(0)
   const [activeEvent, setActiveEvent] = useState(null)
-  const [actionLastUsed, setActionLastUsed] = useState({})
   const [runningStats, setRunningStats] = useState({ participation, learning })
+  const [diceGate, setDiceGate] = useState(null)
 
-  // Initialize seat engagement ref once
   if (seatEngagementRef.current === null) {
     seatEngagementRef.current = initializeSeatEngagement(popularity)
   }
@@ -67,6 +71,7 @@ export default function SimulationScreen({ gameState, onEnd }) {
   const speedRef = useRef(speed)
   const isPausedRef = useRef(isPaused)
   const activeEventRef = useRef(activeEvent)
+  const waitingForDiceStateRef = useRef(false)
 
   useEffect(() => { speedRef.current = speed }, [speed])
   useEffect(() => { isPausedRef.current = isPaused }, [isPaused])
@@ -89,24 +94,15 @@ export default function SimulationScreen({ gameState, onEnd }) {
     runningParticipationRef.current = clampStat(runningParticipationRef.current + deltas.participationDelta)
     runningLearningRef.current = clampStat(runningLearningRef.current + deltas.learningDelta)
 
-    // Update seat engagement
-    const currentAdj = midAdjustmentRef.current
-    midAdjustmentRef.current = null
     seatEngagementRef.current = updateSeats(
       seatEngagementRef.current,
       deltas.participationDelta,
-      currentAdj,
+      null,
       itemBonuses,
     )
 
-    // Speed Up gives a small immediate learning boost
-    if (currentAdj === 'speedUp') {
-      runningLearningRef.current = clampStat(runningLearningRef.current + 2)
-    }
-
     minutesRef.current = t + 1
 
-    // Snapshot to state
     setSeatStates(seatEngagementToState(seatEngagementRef.current))
     setMinutesElapsed(minutesRef.current)
     setRunningStats({
@@ -114,28 +110,101 @@ export default function SimulationScreen({ gameState, onEnd }) {
       learning: runningLearningRef.current,
     })
 
-    // Update action cooldowns
-    setActionLastUsed(prev => {
-      const updated = {}
-      for (const [key, val] of Object.entries(prev)) {
-        if (val < 50) updated[key] = val + 1
-      }
-      return updated
-    })
-
-    // Check for random event
-    if (shouldTriggerEvent(t, eventsTriggeredRef.current)) {
-      const event = selectEvent(eventsTriggeredRef.current.map(e => e.id), dayHistory, 'during')
-      if (event) {
-        eventsTriggeredRef.current = [...eventsTriggeredRef.current, event]
-        setActiveEvent(event)
-      }
+    // Check for random event — enforce 15-minute cooldown between events
+    const minutesSinceLast = t - lastEventMinuteRef.current
+    if (shouldTriggerEvent(t, eventsTriggeredRef.current) && minutesSinceLast >= EVENT_COOLDOWN_MINUTES) {
+      lastEventMinuteRef.current = t
+      waitingForDiceRef.current = true
+      waitingForDiceStateRef.current = true
+      setDiceGate({ minuteTriggered: t })
     }
 
-    // End of lecture
     if (minutesRef.current >= TOTAL_GAME_MINUTES_CONST) {
       endLecture()
     }
+  }
+
+  function handleDiceSubmit(diceTotal) {
+    const allTriggeredIds = dayHistory.flatMap(d => d.eventsTriggered.map(e => e.id))
+    const alreadyThisLecture = eventsTriggeredRef.current.map(e => e.id)
+
+    const event = getEventByDiceTotal(diceTotal)
+    if (event && isEventAvailable(event, alreadyThisLecture, allTriggeredIds)) {
+      eventsTriggeredRef.current = [...eventsTriggeredRef.current, { ...event, rolledDiceTotal: diceTotal }]
+      setDiceRerollMsg(null)
+      setDiceGate(null)
+      setActiveEvent({ ...event, rolledDiceTotal: diceTotal })
+    } else {
+      // Event unavailable — keep dice gate open with re-roll prompt
+      setDiceRerollMsg('That event already occurred this semester — have players roll again!')
+    }
+  }
+
+  function handleEventResolved(hiddenImpact) {
+    if (hiddenImpact) {
+      hiddenImpactsRef.current.push(hiddenImpact)
+    }
+    setActiveEvent(null)
+    waitingForDiceRef.current = false
+    waitingForDiceStateRef.current = false
+    resumeAtRef.current = Date.now() + POST_EVENT_DELAY_MS
+  }
+
+  function handleEventChoice(event, choice) {
+    const fx = choice.effects || {}
+    if (fx.disableAudio) audioDisabledRef.current = true
+    choiceEffectsRef.current.push(fx)
+    choiceRecordsRef.current.push({
+      eventId: event.id,
+      eventTitle: event.title,
+      choiceIndex: event.choices.indexOf(choice),
+      choiceLabel: choice.label,
+      responseType: 'choice',
+    })
+    handleEventResolved(choice.hiddenImpact ? {
+      eventId: event.id,
+      eventTitle: event.title,
+      choiceLabel: choice.label,
+      ...choice.hiddenImpact,
+    } : null)
+  }
+
+  function handleTextEventResolved(event, deltas, quality, responseText) {
+    const fx = {
+      participation: deltas.participationDelta || 0,
+      learning: deltas.learningDelta || 0,
+      popularity: deltas.popularityDelta || 0,
+    }
+    choiceEffectsRef.current.push(fx)
+    choiceRecordsRef.current.push({
+      eventId: event.id,
+      eventTitle: event.title,
+      choiceIndex: -1,
+      responseType: 'text',
+      responseText,
+      claudeQuality: quality,
+      claudeReasoning: deltas.reasoning || '',
+      claudeFeedback: deltas.feedback,
+      claudeEffects: {
+        participationDelta: deltas.participationDelta || 0,
+        learningDelta: deltas.learningDelta || 0,
+        popularityDelta: deltas.popularityDelta || 0,
+      },
+    })
+
+    let hiddenImpact = null
+    if (deltas.hiddenImpactDelta && deltas.hiddenImpactDelta !== 0) {
+      hiddenImpact = {
+        eventId: event.id,
+        eventTitle: event.title,
+        choiceLabel: 'Your response',
+        description: deltas.hiddenImpactDelta > 0
+          ? 'Your response left a lasting positive impression that quietly built your reputation.'
+          : 'Your response left some students uncertain about your approach, quietly affecting your standing.',
+        popularityDelta: deltas.hiddenImpactDelta,
+      }
+    }
+    handleEventResolved(hiddenImpact)
   }
 
   function endLecture() {
@@ -151,19 +220,11 @@ export default function SimulationScreen({ gameState, onEnd }) {
     const engagementRatio = computeFinalEngagementRatio(seatEngagementRef.current)
     const popularityFromEngagement = computePopularityDelta(engagementRatio)
 
-    // Sum up all in-lecture choice effects
     let choiceP = 0, choiceL = 0, choicePop = 0
     for (const fx of choiceEffectsRef.current) {
       choiceP += fx.participation || 0
       choiceL += fx.learning || 0
       choicePop += fx.popularity || 0
-    }
-
-    // Select a post-lecture event (effects resolved interactively in PostLectureScreen)
-    const pendingPostEvents = []
-    if (Math.random() < 0.35) {
-      const postEvent = selectEvent(eventsTriggeredRef.current.map(e => e.id), dayHistory, 'post')
-      if (postEvent) pendingPostEvents.push(postEvent)
     }
 
     onEnd({
@@ -172,26 +233,35 @@ export default function SimulationScreen({ gameState, onEnd }) {
       popularityDelta: popularityFromEngagement + choicePop,
       finalEngagementRatio: engagementRatio,
       eventsTriggered: eventsTriggeredRef.current,
-      pendingPostEvents,
       choiceRecords: choiceRecordsRef.current,
+      hiddenImpacts: hiddenImpactsRef.current,
     })
   }
 
   useEffect(() => {
     function tick(timestamp) {
-      if (lastTimeRef.current === null) lastTimeRef.current = timestamp
-      const delta = timestamp - lastTimeRef.current
-      lastTimeRef.current = timestamp
+      const isBlocked =
+        isPausedRef.current ||
+        !!activeEventRef.current ||
+        waitingForDiceStateRef.current ||
+        Date.now() < resumeAtRef.current
 
-      if (!isPausedRef.current && !activeEventRef.current) {
+      if (!isBlocked) {
+        if (lastTimeRef.current === null) lastTimeRef.current = timestamp
+        const delta = timestamp - lastTimeRef.current
+        lastTimeRef.current = timestamp
+
         accumRef.current += delta * speedRef.current
 
         while (accumRef.current >= MS_PER_GAME_MINUTE) {
           accumRef.current -= MS_PER_GAME_MINUTE
-          if (minutesRef.current < TOTAL_GAME_MINUTES_CONST) {
+          if (minutesRef.current < TOTAL_GAME_MINUTES_CONST && !waitingForDiceRef.current) {
             advanceOneGameMinute()
           }
         }
+      } else {
+        // Reset so we don't accumulate a time jump when unblocking
+        lastTimeRef.current = null
       }
 
       if (minutesRef.current < TOTAL_GAME_MINUTES_CONST) {
@@ -203,39 +273,12 @@ export default function SimulationScreen({ gameState, onEnd }) {
     return () => cancelAnimationFrame(rafRef.current)
   }, [])
 
-  function handleSpeedChange(s) {
-    setSpeed(s)
-  }
-
-  function handlePauseToggle() {
-    setIsPaused(p => !p)
-    lastTimeRef.current = null
-  }
-
-  function handleAction(actionId) {
-    midAdjustmentRef.current = actionId
-    setActionLastUsed(prev => ({ ...prev, [actionId]: 0 }))
-  }
-
-  function handleEventChoice(event, choice) {
-    const fx = choice.effects || {}
-    if (fx.disableAudio) audioDisabledRef.current = true
-    choiceEffectsRef.current.push(fx)
-    choiceRecordsRef.current.push({
-      eventId: event.id,
-      eventTitle: event.title,
-      choiceIndex: event.choices.indexOf(choice),
-      choiceLabel: choice.label,
-    })
-    setActiveEvent(null)
-    lastTimeRef.current = null
-  }
-
   const progress = (minutesElapsed / TOTAL_GAME_MINUTES_CONST) * 100
 
   return (
     <div className="screen screen-simulation">
       <div className="sim-header">
+        <div className="sim-day-badge">Day {currentDay}<span className="sim-day-total">/{totalDays}</span></div>
         <div className="sim-time">
           <span className="time-display">{formatTime(minutesElapsed)}</span>
           <div className="time-track">
@@ -250,20 +293,82 @@ export default function SimulationScreen({ gameState, onEnd }) {
         </div>
         <SpeedControls
           speed={speed}
-          onSpeedChange={handleSpeedChange}
+          onSpeedChange={s => setSpeed(s)}
           isPaused={isPaused}
-          onPauseToggle={handlePauseToggle}
+          onPauseToggle={() => {
+            setIsPaused(p => !p)
+          }}
         />
       </div>
 
       <div className="sim-body">
         <ClassroomGrid seatStates={seatStates} />
-        <MidLecturePanel onAction={handleAction} lastUsed={actionLastUsed} />
       </div>
 
-      {activeEvent && (
-        <EventOverlay event={activeEvent} onChoose={handleEventChoice} />
+      {diceGate && !activeEvent && (
+        <DiceGate onSubmit={handleDiceSubmit} rerollMsg={diceRerollMsg} />
       )}
+
+      {activeEvent && (
+        <EventOverlay
+          event={activeEvent}
+          onChoose={handleEventChoice}
+          onTextResolved={handleTextEventResolved}
+        />
+      )}
+    </div>
+  )
+}
+
+function DiceGate({ onSubmit, rerollMsg }) {
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+
+  function handleSubmit() {
+    const num = parseInt(value, 10)
+    if (isNaN(num) || num < 2 || num > 12) {
+      setError('Please enter a number between 2 and 12.')
+      return
+    }
+    setError('')
+    setValue('')
+    onSubmit(num)
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter') handleSubmit()
+  }
+
+  return (
+    <div className="event-overlay">
+      <div className="event-card dice-gate-card">
+        <div className="dice-gate-icon">🎲🎲</div>
+        <div className="event-title">Something happened in class!</div>
+        <p className="dice-gate-player-instruction">
+          Roll both dice and add the numbers together.
+        </p>
+        <p className="dice-gate-sub">Tell your Game Master the total.</p>
+        <div className="dice-gate-divider" />
+        {rerollMsg && <p className="dice-gate-reroll">{rerollMsg}</p>}
+        <p className="dice-gate-gm-label">GM — enter the dice total:</p>
+        <div className="dice-gate-input-row">
+          <input
+            type="number"
+            min="2"
+            max="12"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            onKeyDown={handleKey}
+            className="dice-input"
+            placeholder="2–12"
+            autoFocus
+          />
+          <button className="btn btn-primary" onClick={handleSubmit}>
+            Confirm
+          </button>
+        </div>
+        {error && <p className="dice-gate-error">{error}</p>}
+      </div>
     </div>
   )
 }

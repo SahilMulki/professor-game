@@ -1,11 +1,9 @@
 import { useState } from 'react'
-import { STARTING_STATS, LECTURE_PLAN_DEFAULTS, SEAT_COUNT } from './constants.js'
-import WelcomeScreen from './screens/WelcomeScreen.jsx'
-import GameLengthScreen from './screens/GameLengthScreen.jsx'
-import InventoryScreen from './screens/InventoryScreen.jsx'
-import LecturePlanScreen from './screens/LecturePlanScreen.jsx'
+import { STARTING_STATS, LECTURE_PLAN_DEFAULTS, TOTAL_DAYS, STARTING_MONEY, DAILY_SALARY } from './constants.js'
+import GmStartScreen from './screens/GmStartScreen.jsx'
+import GmInputScreen from './screens/GmInputScreen.jsx'
+import GmSummaryScreen from './screens/GmSummaryScreen.jsx'
 import SimulationScreen from './screens/SimulationScreen.jsx'
-import PostLectureScreen from './screens/PostLectureScreen.jsx'
 import FinalScoreScreen from './screens/FinalScoreScreen.jsx'
 import './styles/global.css'
 
@@ -28,24 +26,16 @@ function buildInitialInventory() {
 
 function buildInitialState() {
   return {
-    screen: 'welcome',
-    totalDays: 7,
+    screen: 'gmStart',
+    totalDays: TOTAL_DAYS,
     currentDay: 1,
     ...STARTING_STATS,
-    money: 0,
+    money: STARTING_MONEY,
     inventory: buildInitialInventory(),
     lecturePlan: { ...LECTURE_PLAN_DEFAULTS },
-    simulation: {
-      minutesElapsed: 0,
-      isPaused: false,
-      speed: 1,
-      seatStates: Array(SEAT_COUNT).fill('neutral'),
-      activeEvent: null,
-      midLectureLog: [],
-      audioDisabled: false,
-    },
     lastLectureResult: null,
     dayHistory: [],
+    hiddenImpacts: [],
     wonGame: false,
   }
 }
@@ -63,122 +53,92 @@ export default function App() {
 
   const { screen } = gameState
 
+  // GM submits items bought + lecture plan → go to simulation
+  function handleGmInputReady({ inventory, lecturePlan, moneySpent }) {
+    updateGameState({
+      screen: 'simulation',
+      inventory,
+      lecturePlan,
+      money: Math.max(0, gameState.money - (moneySpent || 0)),
+    })
+  }
+
+  // Simulation ends → go to GM summary
+  function handleSimulationEnd(result) {
+    updateGameState({
+      screen: 'gmSummary',
+      lastLectureResult: result,
+    })
+  }
+
+  // GM advances from summary → next day or final screen
+  function handleSummaryNext() {
+    const result = gameState.lastLectureResult
+    const newParticipation = Math.min(100, Math.max(0, gameState.participation + (result.participationDelta || 0)))
+    const newLearning = Math.min(100, Math.max(0, gameState.learning + (result.learningDelta || 0)))
+    const newPopularity = Math.min(100, Math.max(0, gameState.popularity + (result.popularityDelta || 0)))
+    const won = newParticipation >= 100 && newLearning >= 100
+    const nextDay = gameState.currentDay + 1
+    const gameOver = nextDay > gameState.totalDays && !won
+
+    const newHistory = [...gameState.dayHistory, result]
+    const newHiddenImpacts = [...gameState.hiddenImpacts, ...(result.hiddenImpacts || [])]
+
+    // Decrement consumable handouts
+    const updatedInventory = { ...gameState.inventory }
+    if (updatedInventory.printed_handouts > 0) {
+      updatedInventory.printed_handouts -= 1
+    }
+
+    if (won || gameOver) {
+      setGameState(prev => ({
+        ...prev,
+        participation: newParticipation,
+        learning: newLearning,
+        popularity: newPopularity,
+        inventory: updatedInventory,
+        dayHistory: newHistory,
+        hiddenImpacts: newHiddenImpacts,
+        wonGame: won,
+        screen: 'finalScore',
+      }))
+    } else {
+      setGameState(prev => ({
+        ...prev,
+        participation: newParticipation,
+        learning: newLearning,
+        popularity: newPopularity,
+        currentDay: nextDay,
+        money: prev.money + DAILY_SALARY,
+        inventory: updatedInventory,
+        dayHistory: newHistory,
+        hiddenImpacts: newHiddenImpacts,
+        screen: 'gmInput',
+      }))
+    }
+  }
+
   return (
     <div className="app">
-      {screen === 'welcome' && (
-        <WelcomeScreen onNext={() => updateGameState({ screen: 'gameLength' })} />
+      {screen === 'gmStart' && (
+        <GmStartScreen onBegin={() => updateGameState({ screen: 'gmInput' })} />
       )}
-      {screen === 'gameLength' && (
-        <GameLengthScreen
-          onSelect={(days) => {
-            const fresh = buildInitialState()
-            setGameState({
-              ...fresh,
-              screen: 'inventory',
-              totalDays: days,
-              money: 500,
-            })
-          }}
-        />
-      )}
-      {screen === 'inventory' && (
-        <InventoryScreen
+      {screen === 'gmInput' && (
+        <GmInputScreen
           gameState={gameState}
-          onNext={(updatedInventory, moneySpent) =>
-            updateGameState({
-              screen: 'lecturePlan',
-              inventory: updatedInventory,
-              money: gameState.money - moneySpent,
-            })
-          }
-          onHelp={() => updateGameState({ screen: 'welcome' })}
-        />
-      )}
-      {screen === 'lecturePlan' && (
-        <LecturePlanScreen
-          gameState={gameState}
-          onStart={(plan) =>
-            updateGameState({
-              screen: 'simulation',
-              lecturePlan: plan,
-              simulation: {
-                minutesElapsed: 0,
-                isPaused: false,
-                speed: 1,
-                seatStates: Array(SEAT_COUNT).fill('neutral'),
-                activeEvent: null,
-                midLectureLog: [],
-                audioDisabled: false,
-              },
-            })
-          }
-          onBack={() => updateGameState({ screen: 'inventory' })}
+          onReady={handleGmInputReady}
         />
       )}
       {screen === 'simulation' && (
         <SimulationScreen
           gameState={gameState}
-          updateGameState={updateGameState}
-          onEnd={(result) => {
-            updateGameState({
-              screen: 'postLecture',
-              lastLectureResult: result,
-            })
-          }}
+          onEnd={handleSimulationEnd}
         />
       )}
-      {screen === 'postLecture' && (
-        <PostLectureScreen
+      {screen === 'gmSummary' && (
+        <GmSummaryScreen
           gameState={gameState}
-          onNext={(postEventExtra = {}) => {
-            const result = gameState.lastLectureResult
-            const newParticipation = Math.min(100, Math.max(0, gameState.participation + (result.participationDelta || 0) + (postEventExtra.participation || 0)))
-            const newLearning = Math.min(100, Math.max(0, gameState.learning + (result.learningDelta || 0) + (postEventExtra.learning || 0)))
-            const newPopularity = Math.min(100, Math.max(0, gameState.popularity + (result.popularityDelta || 0) + (postEventExtra.popularity || 0)))
-            const won = newParticipation >= 100 && newLearning >= 100
-            const nextDay = gameState.currentDay + 1
-            const gameOver = nextDay > gameState.totalDays && !won
-
-            const mergedResult = {
-              ...result,
-              choiceRecords: [
-                ...(result.choiceRecords || []),
-                ...(postEventExtra.choiceRecords || []),
-              ],
-            }
-            const newHistory = [...gameState.dayHistory, mergedResult]
-
-            // Decrement consumable handouts
-            const updatedInventory = { ...gameState.inventory }
-            if (updatedInventory.printed_handouts > 0) {
-              updatedInventory.printed_handouts -= 1
-            }
-
-            if (won || gameOver) {
-              setGameState(prev => ({
-                ...prev,
-                participation: newParticipation,
-                learning: newLearning,
-                popularity: newPopularity,
-                inventory: updatedInventory,
-                dayHistory: newHistory,
-                wonGame: won,
-                screen: 'finalScore',
-              }))
-            } else {
-              setGameState(prev => ({
-                ...prev,
-                participation: newParticipation,
-                learning: newLearning,
-                popularity: newPopularity,
-                currentDay: nextDay,
-                money: prev.money + 500,
-                inventory: updatedInventory,
-                dayHistory: newHistory,
-                screen: 'inventory',
-              }))
-            }
-          }}
+          onNext={handleSummaryNext}
         />
       )}
       {screen === 'finalScore' && (
