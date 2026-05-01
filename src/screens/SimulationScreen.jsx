@@ -12,6 +12,7 @@ import {
 } from '../gameLogic.js'
 import { shouldTriggerEvent, getEventByDiceTotal, isEventAvailable } from '../eventSystem.js'
 import { MS_PER_GAME_MINUTE } from '../constants.js'
+import { startAmbient, stopAmbient, playSfx } from '../audioManager.js'
 import ClassroomGrid from '../components/ClassroomGrid.jsx'
 import SpeedControls from '../components/SpeedControls.jsx'
 import EventOverlay from '../components/EventOverlay.jsx'
@@ -28,7 +29,7 @@ function formatTime(minutes) {
 }
 
 const TOTAL_GAME_MINUTES_CONST = 50
-const POST_EVENT_DELAY_MS = 2000
+const POST_EVENT_DELAY_MS = 5000
 const EVENT_COOLDOWN_MINUTES = 15
 
 export default function SimulationScreen({ gameState, onEnd }) {
@@ -63,6 +64,8 @@ export default function SimulationScreen({ gameState, onEnd }) {
   const [activeEvent, setActiveEvent] = useState(null)
   const [runningStats, setRunningStats] = useState({ participation, learning })
   const [diceGate, setDiceGate] = useState(null)
+  const [eventToast, setEventToast] = useState(null)
+  const toastTimerRef = useRef(null)
 
   if (seatEngagementRef.current === null) {
     seatEngagementRef.current = initializeSeatEngagement(popularity)
@@ -76,6 +79,11 @@ export default function SimulationScreen({ gameState, onEnd }) {
   useEffect(() => { speedRef.current = speed }, [speed])
   useEffect(() => { isPausedRef.current = isPaused }, [isPaused])
   useEffect(() => { activeEventRef.current = activeEvent }, [activeEvent])
+
+  useEffect(() => {
+    startAmbient()
+    return () => stopAmbient()
+  }, [])
 
   function advanceOneGameMinute() {
     const t = minutesRef.current
@@ -117,6 +125,7 @@ export default function SimulationScreen({ gameState, onEnd }) {
       waitingForDiceRef.current = true
       waitingForDiceStateRef.current = true
       setDiceGate({ minuteTriggered: t })
+      playSfx('trigger')
     }
 
     if (minutesRef.current >= TOTAL_GAME_MINUTES_CONST) {
@@ -150,6 +159,16 @@ export default function SimulationScreen({ gameState, onEnd }) {
     resumeAtRef.current = Date.now() + POST_EVENT_DELAY_MS
   }
 
+  function showToast(effects) {
+    const entries = Object.entries(effects).filter(([, v]) => v !== 0)
+    if (entries.length === 0) return
+    clearTimeout(toastTimerRef.current)
+    setEventToast(effects)
+    toastTimerRef.current = setTimeout(() => setEventToast(null), 5000)
+    const net = (effects.participation || 0) + (effects.learning || 0) + (effects.popularity || 0)
+    playSfx(net > 0 ? 'positive' : net < 0 ? 'negative' : 'neutral')
+  }
+
   function handleEventChoice(event, choice) {
     const fx = choice.effects || {}
     if (fx.disableAudio) audioDisabledRef.current = true
@@ -167,6 +186,11 @@ export default function SimulationScreen({ gameState, onEnd }) {
       choiceLabel: choice.label,
       ...choice.hiddenImpact,
     } : null)
+    showToast({
+      participation: fx.participation || 0,
+      learning: fx.learning || 0,
+      popularity: fx.popularity || 0,
+    })
   }
 
   function handleTextEventResolved(event, deltas, quality, responseText) {
@@ -205,6 +229,7 @@ export default function SimulationScreen({ gameState, onEnd }) {
       }
     }
     handleEventResolved(hiddenImpact)
+    showToast(fx)
   }
 
   function endLecture() {
@@ -302,7 +327,29 @@ export default function SimulationScreen({ gameState, onEnd }) {
       </div>
 
       <div className="sim-body">
-        <ClassroomGrid seatStates={seatStates} />
+        <ClassroomGrid
+          seatStates={seatStates}
+          isEventActive={!!activeEvent || !!diceGate}
+        />
+        {eventToast && (
+          <div className="event-toast">
+            {eventToast.participation !== 0 && (
+              <span className={`toast-stat ${eventToast.participation > 0 ? 'toast-pos' : 'toast-neg'}`}>
+                {eventToast.participation > 0 ? '+' : ''}{eventToast.participation} Participation
+              </span>
+            )}
+            {eventToast.learning !== 0 && (
+              <span className={`toast-stat ${eventToast.learning > 0 ? 'toast-pos' : 'toast-neg'}`}>
+                {eventToast.learning > 0 ? '+' : ''}{eventToast.learning} Learning
+              </span>
+            )}
+            {eventToast.popularity !== 0 && (
+              <span className={`toast-stat ${eventToast.popularity > 0 ? 'toast-pos' : 'toast-neg'}`}>
+                {eventToast.popularity > 0 ? '+' : ''}{eventToast.popularity} Popularity
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {diceGate && !activeEvent && (
